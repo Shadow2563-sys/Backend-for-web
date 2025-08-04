@@ -1,27 +1,37 @@
 const express = require('express');
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, makeInMemoryStore, DisconnectReason } = require('@whiskeysockets/baileys');
-const pino = require('pino');
-const chalk = require('chalk');
-const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
+const pino = require('pino');
+const chalk = require('chalk');
+const {
+    makeWASocket,
+    useMultiFileAuthState,
+    fetchLatestBaileysVersion
+} = require('@whiskeysockets/baileys');
 
 const app = express();
-app.use(cors());
-app.use(express.json());
-
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+const io = new Server(server, {
+    cors: { origin: "*" } // Allow all origins (you can restrict later)
+});
+
+app.use(express.json());
 
 let shadow;
 let isWhatsAppConnected = false;
-const store = makeInMemoryStore({ logger: pino().child({ level: 'silent', stream: 'store' }) });
 
-async function startSesi() {
+// Helper to emit logs to all connected clients
+const emitLog = (message) => {
+    console.log(message);
+    io.emit('console', message);
+};
+
+// Start WhatsApp session
+const startSesi = async () => {
     const { state, saveCreds } = await useMultiFileAuthState('./session');
     const { version } = await fetchLatestBaileysVersion();
 
-    shadow = makeWASocket({
+    const connectionOptions = {
         version,
         keepAliveIntervalMs: 30000,
         printQRInTerminal: false,
@@ -29,44 +39,66 @@ async function startSesi() {
         auth: state,
         browser: ['Mac OS', 'Safari', '10.15.7'],
         getMessage: async () => ({ conversation: 'P' }),
-    });
+    };
 
+    shadow = makeWASocket(connectionOptions);
     shadow.ev.on('creds.update', saveCreds);
-    store.bind(shadow.ev);
 
-    shadow.ev.on('connection.update', ({ connection, lastDisconnect }) => {
+    shadow.ev.on('connection.update', (update) => {
+        const { connection, lastDisconnect } = update;
+
         if (connection === 'open') {
             isWhatsAppConnected = true;
-            io.emit('console', '🟢 WHATSAPP: ONLINE');
+            emitLog('🟢 WHATSAPP: ONLINE');
         }
+
         if (connection === 'close') {
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            io.emit('console', '🔴 WHATSAPP: DISCONNECTED');
+            isWhatsAppConnected = false;
+            emitLog('🔴 WHATSAPP: DISCONNECTED');
+            const shouldReconnect =
+                lastDisconnect?.error?.output?.statusCode !== 401;
             if (shouldReconnect) {
-                io.emit('console', '↻ RECONNECTING...');
+                emitLog('↻ RECONNECTING...');
                 startSesi();
             }
-            isWhatsAppConnected = false;
         }
     });
-}
+};
 
+// Generate pairing code
 app.post('/pair', async (req, res) => {
-    const { number } = req.body;
-    if (!number) return res.status(400).json({ error: 'Number is required' });
-
-    io.emit('console', `Requesting pairing code for ${number}...`);
     try {
+        const { number } = req.body;
+        if (!number) return res.status(400).json({ error: 'Number is required' });
+
+        if (!shadow) await startSesi();
+
+        emitLog(`Requesting pairing code for ${number}...`);
         const code = await shadow.requestPairingCode(number);
-        io.emit('console', `Pairing Code: ${code}`);
-        res.json({ code });
-    } catch (error) {
-        io.emit('console', `Error: ${error.message}`);
-        res.status(500).json({ error: 'Failed to generate code' });
+
+        emitLog(`✅ Pairing Code for ${number}: ${code}`);
+        return res.json({ code });
+    } catch (err) {
+        emitLog(`Error: ${err.message}`);
+        return res.status(500).json({ error: 'Failed to generate pairing code' });
     }
 });
 
-server.listen(5000, () => {
-    console.log('Server running on port 5000');
-    startSesi();
+// Root route
+app.get('/', (req, res) => res.send('Backend is running with Socket.IO'));
+
+// Start server
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    startSesi(); // Initialize WhatsApp session on startup
+});
+
+// Handle socket connections
+io.on('connection', (socket) => {
+    console.log('Client connected:', socket.id);
+    socket.emit('console', 'System Ready...');
+    socket.on('disconnect', () => {
+        console.log('Client disconnected:', socket.id);
+    });
 });

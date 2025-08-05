@@ -1,17 +1,20 @@
 {
-  "name": "bluex-bot-pair-backend",
+  "name": "bluex-bot-pair",
   "version": "1.0.0",
-  "description": "Backend for BlueX Bot Pair with Baileys and Express",
+  "description": "WhatsApp Pairing System",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "github:alibase77/XD-Baileys",
-    "chalk": "^5.5.0",
-    "cors": "^2.8.5",
-    "express": "^5.1.0",
-    "pino": "^9.7.0",
-    "socket.io": "^4.8.1"
+    "chalk": "^4.1.2",
+    "express": "^5.0.0",
+    "pino": "^9.1.1",
+    "socket.io": "^4.7.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
   }
 }

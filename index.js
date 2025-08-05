@@ -2,7 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const pino = require('pino');
-const chalk = require('chalk');
+const chalk = require('chalk').default; // Updated chalk import
 const {
     makeWASocket,
     useMultiFileAuthState,
@@ -32,24 +32,25 @@ app.use(express.static('public'));
 let shadow;
 let isWhatsAppConnected = false;
 
-// Enhanced logger
+// Enhanced logger with colors and timestamp
 const emitLog = (message) => {
     const timestamp = new Date().toLocaleTimeString();
     const logMessage = `[${timestamp}] ${message}`;
     
+    // Updated chalk usage
     const coloredMessage = 
         message.includes('🟢') ? chalk.green(logMessage) :
         message.includes('🔴') ? chalk.red(logMessage) :
         message.includes('↻') ? chalk.yellow(logMessage) :
         message.includes('❌') ? chalk.redBright(logMessage) :
         message.includes('✅') ? chalk.greenBright(logMessage) :
-        chalk.cyan(logMessage);
+        chalk.blue(logMessage); // Changed from cyan to blue
     
     console.log(coloredMessage);
     io.emit('console', logMessage);
 };
 
-// WhatsApp connection handler
+// Improved WhatsApp session handler
 const startSesi = async (retryCount = 0) => {
     const MAX_RETRIES = 5;
     
@@ -63,7 +64,8 @@ const startSesi = async (retryCount = 0) => {
             auth: state,
             printQRInTerminal: false,
             browser: ['BlueX Bot', 'Chrome', '120.0.0'],
-            keepAliveIntervalMs: 30000
+            keepAliveIntervalMs: 30000,
+            getMessage: async () => ({ conversation: 'P' })
         };
 
         shadow = makeWASocket(connectionOptions);
@@ -74,21 +76,19 @@ const startSesi = async (retryCount = 0) => {
 
             if (connection === 'open') {
                 isWhatsAppConnected = true;
-                emitLog('🟢 WHATSAPP: CONNECTED');
+                emitLog('🟢 WHATSAPP: ONLINE');
                 io.emit('connection-status', true);
             }
 
             if (connection === 'close') {
                 isWhatsAppConnected = false;
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const errorMessage = lastDisconnect?.error?.message || 'Unknown error';
-                
-                emitLog(`🔴 WHATSAPP: DISCONNECTED (Code: ${statusCode || 'unknown'}, Reason: ${errorMessage})`);
+                emitLog(`🔴 WHATSAPP: DISCONNECTED (Code: ${statusCode || 'unknown'})`);
                 io.emit('connection-status', false);
                 
                 if (statusCode !== 401 && retryCount < MAX_RETRIES - 1) {
                     const delay = Math.min(10000, (retryCount + 1) * 2000);
-                    emitLog(`↻ Attempting reconnect in ${delay/1000} seconds...`);
+                    emitLog(`↻ RECONNECTING in ${delay/1000} seconds...`);
                     setTimeout(() => startSesi(retryCount + 1), delay);
                 }
             }
@@ -107,50 +107,26 @@ const startSesi = async (retryCount = 0) => {
 app.post('/pair', async (req, res) => {
     try {
         const { number } = req.body;
-        
-        if (!number || typeof number !== 'string') {
-            return res.status(400).json({ 
-                success: false,
-                error: 'Valid number is required'
-            });
-        }
-
-        const cleanedNumber = number.replace(/\D/g, '');
-        if (!cleanedNumber.startsWith('234') || cleanedNumber.length !== 13) {
-            return res.status(400).json({
-                success: false,
-                error: 'Invalid Nigerian number format'
-            });
-        }
+        if (!number) return res.status(400).json({ error: 'Number is required' });
 
         if (!shadow || !isWhatsAppConnected) {
             await startSesi();
-            return res.status(503).json({
-                success: false,
-                error: 'WhatsApp connection initializing'
-            });
+            return res.status(503).json({ error: 'WhatsApp connection not ready' });
         }
 
-        emitLog(`Requesting pairing code for ${cleanedNumber}...`);
-        
+        emitLog(`Requesting pairing code for ${number}...`);
+        const cleanedNumber = number.replace(/\D/g, '');
         const code = await shadow.requestPairingCode(cleanedNumber);
+
+        if (!code) throw new Error('No code received from WhatsApp');
         
-        if (!code) {
-            throw new Error('No pairing code received');
-        }
-        
-        emitLog(`✅ Pairing Code for ${cleanedNumber}: ${code}`);
-        return res.json({ 
-            success: true,
-            code,
-            number: cleanedNumber
-        });
-        
+        emitLog(`✅ Pairing Code for ${number}: ${code}`);
+        return res.json({ code });
     } catch (err) {
-        emitLog(`❌ Pairing Error: ${err.message}`);
-        return res.status(500).json({
-            success: false,
-            error: 'Failed to generate pairing code'
+        emitLog(`❌ Error: ${err.message}`);
+        return res.status(500).json({ 
+            error: 'Failed to generate pairing code',
+            details: err.message 
         });
     }
 });
@@ -168,14 +144,16 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Start server
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-    emitLog(`🚀 Server running on port ${PORT}`);
+    emitLog(`Server running on port ${PORT}`);
     startSesi();
 });
 
-// Socket.IO
 io.on('connection', (socket) => {
+    emitLog(`Client connected: ${socket.id}`);
     socket.emit('console', '[System] Ready...');
+    socket.on('disconnect', () => {
+        emitLog(`Client disconnected: ${socket.id}`);
+    });
 });

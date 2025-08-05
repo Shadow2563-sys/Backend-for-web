@@ -2,7 +2,6 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const pino = require('pino');
-const chalk = require('chalk').default; // Updated chalk import
 const {
     makeWASocket,
     useMultiFileAuthState,
@@ -32,25 +31,15 @@ app.use(express.static('public'));
 let shadow;
 let isWhatsAppConnected = false;
 
-// Enhanced logger with colors and timestamp
+// Simplified logger without chalk
 const emitLog = (message) => {
     const timestamp = new Date().toLocaleTimeString();
     const logMessage = `[${timestamp}] ${message}`;
-    
-    // Updated chalk usage
-    const coloredMessage = 
-        message.includes('🟢') ? chalk.green(logMessage) :
-        message.includes('🔴') ? chalk.red(logMessage) :
-        message.includes('↻') ? chalk.yellow(logMessage) :
-        message.includes('❌') ? chalk.redBright(logMessage) :
-        message.includes('✅') ? chalk.greenBright(logMessage) :
-        chalk.blue(logMessage); // Changed from cyan to blue
-    
-    console.log(coloredMessage);
+    console.log(logMessage);
     io.emit('console', logMessage);
 };
 
-// Improved WhatsApp session handler
+// WhatsApp connection handler
 const startSesi = async (retryCount = 0) => {
     const MAX_RETRIES = 5;
     
@@ -63,7 +52,7 @@ const startSesi = async (retryCount = 0) => {
             logger: pino({ level: "silent" }),
             auth: state,
             printQRInTerminal: false,
-            browser: ['BlueX Bot', 'Chrome', '120.0.0'],
+            browser: ['Mac OS', 'Safari', '10.15.7'],
             keepAliveIntervalMs: 30000,
             getMessage: async () => ({ conversation: 'P' })
         };

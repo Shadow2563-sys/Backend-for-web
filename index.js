@@ -19,16 +19,11 @@ const io = new Server(server, {
     }
 });
 
-// Ensure directories exist
-const publicDir = path.join(__dirname, 'public');
+// Ensure session directory exists
 const sessionDir = path.join(__dirname, 'session');
-
-[publicDir, sessionDir].forEach(dir => {
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir);
-});
+if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir);
 
 app.use(express.json());
-app.use(express.static(publicDir));
 
 let shadow;
 let isWhatsAppConnected = false;
@@ -103,7 +98,11 @@ app.post('/pair', async (req, res) => {
     }
 });
 
-// Start server
+// Health check
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok', whatsappConnected: isWhatsAppConnected });
+});
+
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
     emitLog(`Server running on port ${PORT}`);
@@ -111,5 +110,6 @@ server.listen(PORT, () => {
 });
 
 io.on('connection', (socket) => {
+    emitLog(`Client connected: ${socket.id}`);
     socket.emit('console', 'System Ready...');
 });

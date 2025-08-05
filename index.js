@@ -13,25 +13,26 @@ const fs = require('fs');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-    cors: { 
+    cors: {
         origin: "*",
         methods: ["GET", "POST"]
     }
 });
 
-// Create session directory if not exists
+// Ensure directories exist
+const publicDir = path.join(__dirname, 'public');
 const sessionDir = path.join(__dirname, 'session');
-if (!fs.existsSync(sessionDir)) {
-    fs.mkdirSync(sessionDir);
-}
+
+[publicDir, sessionDir].forEach(dir => {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir);
+});
 
 app.use(express.json());
-app.use(express.static('public'));
+app.use(express.static(publicDir));
 
 let shadow;
 let isWhatsAppConnected = false;
 
-// Simplified logger without chalk
 const emitLog = (message) => {
     const timestamp = new Date().toLocaleTimeString();
     const logMessage = `[${timestamp}] ${message}`;
@@ -39,25 +40,20 @@ const emitLog = (message) => {
     io.emit('console', logMessage);
 };
 
-// WhatsApp connection handler
-const startSesi = async (retryCount = 0) => {
-    const MAX_RETRIES = 5;
-    
+const startSesi = async () => {
     try {
         const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
         const { version } = await fetchLatestBaileysVersion();
 
-        const connectionOptions = {
+        shadow = makeWASocket({
             version,
             logger: pino({ level: "silent" }),
             auth: state,
             printQRInTerminal: false,
             browser: ['Mac OS', 'Safari', '10.15.7'],
-            keepAliveIntervalMs: 30000,
-            getMessage: async () => ({ conversation: 'P' })
-        };
+            keepAliveIntervalMs: 30000
+        });
 
-        shadow = makeWASocket(connectionOptions);
         shadow.ev.on('creds.update', saveCreds);
 
         shadow.ev.on('connection.update', (update) => {
@@ -65,30 +61,20 @@ const startSesi = async (retryCount = 0) => {
 
             if (connection === 'open') {
                 isWhatsAppConnected = true;
-                emitLog('🟢 WHATSAPP: ONLINE');
-                io.emit('connection-status', true);
+                emitLog('🟢 WHATSAPP: CONNECTED');
             }
 
             if (connection === 'close') {
                 isWhatsAppConnected = false;
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                emitLog(`🔴 WHATSAPP: DISCONNECTED (Code: ${statusCode || 'unknown'})`);
-                io.emit('connection-status', false);
-                
-                if (statusCode !== 401 && retryCount < MAX_RETRIES - 1) {
-                    const delay = Math.min(10000, (retryCount + 1) * 2000);
-                    emitLog(`↻ RECONNECTING in ${delay/1000} seconds...`);
-                    setTimeout(() => startSesi(retryCount + 1), delay);
-                }
+                const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== 401;
+                emitLog(`🔴 WHATSAPP: DISCONNECTED${shouldReconnect ? ' - Reconnecting...' : ''}`);
+                if (shouldReconnect) setTimeout(startSesi, 5000);
             }
         });
 
     } catch (err) {
-        emitLog(`❌ Initialization Error: ${err.message}`);
-        if (retryCount < MAX_RETRIES - 1) {
-            const delay = 5000;
-            setTimeout(() => startSesi(retryCount + 1), delay);
-        }
+        emitLog(`❌ Error: ${err.message}`);
+        setTimeout(startSesi, 10000);
     }
 };
 
@@ -99,50 +85,31 @@ app.post('/pair', async (req, res) => {
         if (!number) return res.status(400).json({ error: 'Number is required' });
 
         if (!shadow || !isWhatsAppConnected) {
-            await startSesi();
-            return res.status(503).json({ error: 'WhatsApp connection not ready' });
+            return res.status(503).json({ error: 'WhatsApp not connected' });
         }
 
-        emitLog(`Requesting pairing code for ${number}...`);
         const cleanedNumber = number.replace(/\D/g, '');
-        const code = await shadow.requestPairingCode(cleanedNumber);
-
-        if (!code) throw new Error('No code received from WhatsApp');
+        emitLog(`Requesting pairing code for ${cleanedNumber}...`);
         
-        emitLog(`✅ Pairing Code for ${number}: ${code}`);
-        return res.json({ code });
+        const code = await shadow.requestPairingCode(cleanedNumber);
+        if (!code) throw new Error('No code received');
+
+        emitLog(`✅ Pairing Code: ${code}`);
+        return res.json({ success: true, code });
+
     } catch (err) {
-        emitLog(`❌ Error: ${err.message}`);
-        return res.status(500).json({ 
-            error: 'Failed to generate pairing code',
-            details: err.message 
-        });
+        emitLog(`❌ Pairing Error: ${err.message}`);
+        return res.status(500).json({ error: err.message });
     }
 });
 
-// Health check
-app.get('/health', (req, res) => {
-    res.json({
-        status: 'ok',
-        whatsappConnected: isWhatsAppConnected
-    });
-});
-
-// Serve frontend
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-const PORT = process.env.PORT || 5000;
+// Start server
+const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
     emitLog(`Server running on port ${PORT}`);
     startSesi();
 });
 
 io.on('connection', (socket) => {
-    emitLog(`Client connected: ${socket.id}`);
-    socket.emit('console', '[System] Ready...');
-    socket.on('disconnect', () => {
-        emitLog(`Client disconnected: ${socket.id}`);
-    });
+    socket.emit('console', 'System Ready...');
 });
